@@ -36,6 +36,13 @@ This tutorial guides you through creating a full-stack chatbot application that 
       - [backend/rag\_model.py](#backendrag_modelpy)
       - [frontend/src/App.js](#frontendsrcappjs)
     - [Conclusion for Discovery 3](#conclusion-for-discovery-3)
+  - [Discovery 4: Serverless Deployment with AWS Lambda and API Gateway](#discovery-4-serverless-deployment-with-aws-lambda-and-api-gateway)
+    - [1. Setting Up the Project](#1-setting-up-the-project)
+    - [2. Create Lambda Function](#2-create-lambda-function)
+    - [3. Setting Up API Gateway](#3-setting-up-api-gateway)
+    - [4. Update Frontend to Use API Gateway Endpoints](#4-update-frontend-to-use-api-gateway-endpoints)
+      - [frontend/src/App.js](#frontendsrcappjs-1)
+    - [Conclusion](#conclusion)
 
 ## Discover 1: Introduction
 
@@ -733,9 +740,7 @@ from langchain.chains import SimpleSequentialChain
 from langchain.prompts import ChatPromptTemplate
 from rag_model import generate_response, add_document_to_db
 
-app = Flask(__name
-
-__)
+app = Flask(__name__)
 CORS(app)
 api = Api(app)
 
@@ -900,3 +905,234 @@ export default App;
 ### Conclusion for Discovery 3
 
 By following this tutorial, you can create a scalable chatbot application using AWS services. This setup includes hosting the backend on EC2, managing a PostgreSQL database with RDS (enhanced with `pgvector` for vector search), implementing caching with ElastiCache, storing static assets on S3, and optionally using Lambda for serverless functions and API Gateway for managing APIs. This approach ensures a robust, scalable, and efficient chatbot application following industry best practices.
+
+To make the chatbot application serverless, we'll use AWS Lambda for running our backend logic and Amazon API Gateway to handle the API requests. This approach ensures that the application scales automatically with demand, reducing the need for server management and providing a cost-effective solution.
+
+## Discovery 4: Serverless Deployment with AWS Lambda and API Gateway
+
+### 1. Setting Up the Project
+
+1. **Project Structure**
+
+   Adjust the project structure to include a directory for Lambda functions:
+
+   ```text
+   rag-chatbot-app/
+   ├── backend/
+   │   ├── lambda_function.py
+   │   └── requirements.txt
+   ├── frontend/
+   ├── data/
+   │   └── knowledge_base.json
+   └── README.md
+   ```
+
+### 2. Create Lambda Function
+
+1. **Create Lambda Function on AWS**
+
+   - Go to the AWS Lambda Dashboard.
+   - Click "Create function".
+   - Choose "Author from scratch".
+   - Function name: `ChatbotBackend`
+   - Runtime: Python 3.x
+   - Role: Create a new role with basic Lambda permissions.
+   - Click "Create function".
+
+2. **Configure Lambda Function**
+
+   - In the function's configuration page, go to "Permissions".
+   - Attach necessary permissions for RDS, S3, and ElastiCache access.
+
+3. **Write Lambda Function Code**
+
+   Update `lambda_function.py` with the necessary logic:
+
+   ```python
+   import json
+   import psycopg2
+   import redis
+   import boto3
+   from transformers import RagTokenizer, RagRetriever, RagSequenceForGeneration
+   import torch
+
+   # Database connection
+   conn = psycopg2.connect(
+       host="your-rds-endpoint",
+       database="chatbot_db",
+       user="your-username",
+       password="your-password"
+   )
+   cursor = conn.cursor()
+
+   # Redis connection
+   redis_client = redis.StrictRedis(host='your-elasticache-endpoint', port=6379, db=0)
+
+   # Initialize the tokenizer and model
+   tokenizer = RagTokenizer.from_pretrained("facebook/rag-sequence-nq")
+   model = RagSequenceForGeneration.from_pretrained("facebook/rag-sequence-nq")
+
+   def add_document_to_db(document):
+       inputs = tokenizer(document['text'], return_tensors="pt")
+       with torch.no_grad():
+           embedding = model.retrieval_embeddings(**inputs).detach().numpy().flatten()
+       cursor.execute(
+           "INSERT INTO documents (title, text, embedding) VALUES (%s, %s, %s)",
+           (document['title'], document['text'], embedding)
+       )
+       conn.commit()
+
+   def query_similar_documents(query, top_k=5):
+       inputs = tokenizer(query, return_tensors="pt")
+       with torch.no_grad():
+           query_embedding = model.retrieval_embeddings(**inputs).detach().numpy().flatten()
+       cursor.execute(
+           "SELECT id, title, text, 1 - (embedding <=> %s::vector) AS similarity FROM documents ORDER BY similarity DESC LIMIT %s",
+           (query_embedding, top_k)
+       )
+       return cursor.fetchall()
+
+   def generate_response(query):
+       similar_docs = query_similar_documents(query)
+       context = " ".join([doc[2] for doc in similar_docs])
+       input_ids = tokenizer(query + context, return_tensors="pt").input_ids
+       outputs = model.generate(input_ids=input_ids)
+       response = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+       return response
+
+   def lambda_handler(event, context):
+       body = json.loads(event['body'])
+       if event['resource'] == '/message':
+           user_message = body['message']
+           cached_response = redis_client.get(user_message)
+           if cached_response:
+               bot_response = cached_response.decode('utf-8')
+           else:
+               bot_response = generate_response(user_message)
+               redis_client.set(user_message, bot_response)
+           return {
+               'statusCode': 200,
+               'body': json.dumps({'message': bot_response})
+           }
+       elif event['resource'] == '/document':
+           document = body['document']
+           add_document_to_db(document)
+           return {
+               'statusCode': 201,
+               'body': json.dumps({'message': 'Document added'})
+           }
+   ```
+
+4. **Deploy Lambda Function Code**
+
+   - Zip the `lambda_function.py` and `requirements.txt` files:
+
+     ```bash
+     zip function.zip lambda_function.py requirements.txt
+     ```
+
+   - Upload the zip file to the Lambda function.
+
+### 3. Setting Up API Gateway
+
+1. **Create an API**
+
+   - Go to the API Gateway Dashboard.
+   - Click "Create API".
+   - Choose "REST API".
+   - Click "Build".
+   - Name your API (e.g., `ChatbotAPI`).
+   - Click "Create API".
+
+2. **Create Resources and Methods**
+
+   - **Resource**: `/message`
+     - Click "Actions" > "Create Resource".
+     - Resource Name: `message`
+     - Resource Path: `message`
+     - Click "Create Resource".
+     - Select the `/message` resource.
+     - Click "Actions" > "Create Method".
+     - Select `POST` and click the checkmark.
+     - Integration type: "Lambda Function".
+     - Lambda Region: `your-region`
+     - Lambda Function: `ChatbotBackend`
+     - Click "Save" and acknowledge the permissions dialog.
+
+   - **Resource**: `/document`
+     - Repeat the steps above to create the `/document` resource with a `POST` method.
+
+3. **Deploy API**
+
+   - Click "Actions" > "Deploy API".
+   - Deployment stage: `New Stage`.
+   - Stage name: `prod`.
+   - Click "Deploy".
+
+4. **Update Lambda Permissions**
+
+   Ensure your Lambda function has permissions to be invoked by API Gateway:
+
+   ```bash
+   aws lambda add-permission --function-name ChatbotBackend --statement-id apigateway-test-2 --action "lambda:InvokeFunction" --principal apigateway.amazonaws.com --source-arn "arn:aws:execute-api:your-region:your-account-id:your-api-id/*/POST/message"
+   aws lambda add-permission --function-name ChatbotBackend --statement-id apigateway-test-3 --action "lambda:InvokeFunction" --principal apigateway.amazonaws.com --source-arn "arn:aws:execute-api:your-region:your-account-id:your-api-id/*/POST/document"
+   ```
+
+### 4. Update Frontend to Use API Gateway Endpoints
+
+Update your React frontend to call the API Gateway endpoints.
+
+#### frontend/src/App.js
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+
+const App = () => {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+
+  useEffect(() => {
+    axios.get('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message')
+      .then(response => {
+        setMessages(response.data.messages);
+      });
+  }, []);
+
+  const sendMessage = () => {
+    axios.post('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message', { message: input })
+      .then(response => {
+        setMessages([...messages, { message: input }]);
+        setInput('');
+        setTimeout(() => {
+          axios.get('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message')
+            .then(response => {
+              setMessages(response.data.messages);
+            });
+        }, 1000); // Allow some time for the bot to respond
+      });
+  };
+
+  return (
+    <div>
+      <h1>Chatbot</h1>
+      <div>
+        {messages.map((msg, index) => <p key={index}>{msg.message}</p>)}
+      </div>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        type="text"
+        placeholder="Type a message"
+      />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+};
+
+export default App;
+```
+
+### Conclusion
+
+By following this tutorial, you can create a serverless chatbot application using AWS Lambda and API Gateway. This setup ensures that your application scales automatically with demand, reduces the need for server management, and provides a cost-effective solution. The application includes hosting the backend logic on Lambda, managing a PostgreSQL database with RDS (enhanced with `pgvector` for vector search), implementing caching with ElastiCache, and managing APIs with API Gateway.
