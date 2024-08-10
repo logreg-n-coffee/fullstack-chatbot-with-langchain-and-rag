@@ -41,8 +41,15 @@ This tutorial guides you through creating a full-stack chatbot application that 
     - [2. Create Lambda Function](#2-create-lambda-function)
     - [3. Setting Up API Gateway](#3-setting-up-api-gateway)
     - [4. Update Frontend to Use API Gateway Endpoints](#4-update-frontend-to-use-api-gateway-endpoints)
-      - [frontend/src/App.js](#frontendsrcappjs-1)
+      - [frontend/src/App.js for Disovery 4](#frontendsrcappjs-for-disovery-4)
     - [Conclusion](#conclusion)
+  - [Discovery 5: Serverless Deployment with AWS Lambda and API Gateway using Terraform](#discovery-5-serverless-deployment-with-aws-lambda-and-api-gateway-using-terraform)
+    - [1. Setting Up the Project for Discovery 5](#1-setting-up-the-project-for-discovery-5)
+    - [2. Using Terraform for AWS Infrastructure](#2-using-terraform-for-aws-infrastructure)
+    - [3. Setting Up the Lambda Function](#3-setting-up-the-lambda-function)
+    - [4. Update Frontend to Use API Gateway Endpoints for Discovery 5](#4-update-frontend-to-use-api-gateway-endpoints-for-discovery-5)
+      - [frontend/src/App.js for Discovery 5](#frontendsrcappjs-for-discovery-5)
+    - [Conclusion for Discovery 5](#conclusion-for-discovery-5)
 
 ## Discover 1: Introduction
 
@@ -1082,7 +1089,7 @@ To make the chatbot application serverless, we'll use AWS Lambda for running our
 
 Update your React frontend to call the API Gateway endpoints.
 
-#### frontend/src/App.js
+#### frontend/src/App.js for Disovery 4
 
 ```jsx
 import React, { useState, useEffect } from 'react';
@@ -1136,3 +1143,393 @@ export default App;
 ### Conclusion
 
 By following this tutorial, you can create a serverless chatbot application using AWS Lambda and API Gateway. This setup ensures that your application scales automatically with demand, reduces the need for server management, and provides a cost-effective solution. The application includes hosting the backend logic on Lambda, managing a PostgreSQL database with RDS (enhanced with `pgvector` for vector search), implementing caching with ElastiCache, and managing APIs with API Gateway.
+
+You're correct that when using AWS Lambda for the backend, you typically wouldn't need Docker for the backend since Lambda handles the execution environment. However, Docker can be useful for local development and testing. Let's simplify the guide to focus on using AWS Lambda and Terraform without Docker for the backend.
+
+## Discovery 5: Serverless Deployment with AWS Lambda and API Gateway using Terraform
+
+### 1. Setting Up the Project for Discovery 5
+
+1. **Project Structure**
+
+   Adjust the project structure to include a directory for Lambda functions:
+
+   ```text
+   rag-chatbot-app/
+   ├── backend/
+   │   ├── lambda_function.py
+   │   └── requirements.txt
+   ├── frontend/
+   ├── data/
+   │   └── knowledge_base.json
+   └── README.md
+   ```
+
+### 2. Using Terraform for AWS Infrastructure
+
+1. **Install Terraform**
+
+   Follow the [official Terraform installation guide](https://learn.hashicorp.com/tutorials/terraform/install-cli) to install Terraform on your machine.
+
+2. **Create Terraform Configuration**
+
+   Create a directory `terraform` and add the following files:
+
+   **providers.tf**
+
+   ```hcl
+   provider "aws" {
+     region = "us-east-1"
+   }
+   ```
+
+   **main.tf**
+
+   ```hcl
+   resource "aws_vpc" "main" {
+     cidr_block = "10.0.0.0/16"
+   }
+
+   resource "aws_subnet" "subnet" {
+     vpc_id            = aws_vpc.main.id
+     cidr_block        = "10.0.1.0/24"
+     availability_zone = "us-east-1a"
+   }
+
+   resource "aws_security_group" "lambda_sg" {
+     vpc_id = aws_vpc.main.id
+
+     ingress {
+       from_port   = 0
+       to_port     = 0
+       protocol    = "-1"
+       cidr_blocks = ["0.0.0.0/0"]
+     }
+
+     egress {
+       from_port   = 0
+       to_port     = 0
+       protocol    = "-1"
+       cidr_blocks = ["0.0.0.0/0"]
+     }
+   }
+
+   resource "aws_rds_cluster" "chatbot" {
+     cluster_identifier      = "chatbot-db-cluster"
+     engine                  = "aurora-postgresql"
+     master_username         = "your-username"
+     master_password         = "your-password"
+     database_name           = "chatbotdb"
+     backup_retention_period = 5
+     preferred_backup_window = "07:00-09:00"
+     skip_final_snapshot     = true
+     vpc_security_group_ids  = [aws_security_group.lambda_sg.id]
+
+     db_subnet_group_name = aws_db_subnet_group.db_subnet_group.name
+   }
+
+   resource "aws_db_subnet_group" "db_subnet_group" {
+     name       = "chatbot-db-subnet-group"
+     subnet_ids = [aws_subnet.subnet.id]
+
+     tags = {
+       Name = "Chatbot DB Subnet Group"
+     }
+   }
+
+   resource "aws_elasticache_cluster" "chatbot_redis" {
+     cluster_id           = "chatbot-redis-cluster"
+     engine               = "redis"
+     node_type            = "cache.t2.micro"
+     num_cache_nodes      = 1
+     parameter_group_name = "default.redis3.2"
+     port                 = 6379
+     subnet_group_name    = aws_elasticache_subnet_group.subnet_group.name
+     vpc_security_group_ids = [aws_security_group.lambda_sg.id]
+   }
+
+   resource "aws_elasticache_subnet_group" "subnet_group" {
+     name       = "chatbot-redis-subnet-group"
+     subnet_ids = [aws_subnet.subnet.id]
+   }
+
+   resource "aws_lambda_function" "chatbot_backend" {
+     filename         = "lambda_function.zip"
+     function_name    = "ChatbotBackend"
+     role             = aws_iam_role.lambda_exec.arn
+     handler          = "lambda_function.lambda_handler"
+     source_code_hash = filebase64sha256("lambda_function.zip")
+     runtime          = "python3.8"
+     timeout          = 15
+
+     environment {
+       variables = {
+         RDS_ENDPOINT    = aws_rds_cluster.chatbot.endpoint
+         REDIS_ENDPOINT  = aws_elasticache_cluster.chatbot_redis.cache_nodes.0.address
+       }
+     }
+
+     vpc_config {
+       subnet_ids         = [aws_subnet.subnet.id]
+       security_group_ids = [aws_security_group.lambda_sg.id]
+     }
+   }
+
+   resource "aws_iam_role" "lambda_exec" {
+     name = "lambda_exec_role"
+
+     assume_role_policy = jsonencode({
+       Version = "2012-10-17"
+       Statement = [
+         {
+           Action = "sts:AssumeRole"
+           Effect = "Allow"
+           Principal = {
+             Service = "lambda.amazonaws.com"
+           }
+         }
+       ]
+     })
+   }
+
+   resource "aws_iam_role_policy_attachment" "lambda_exec_attach" {
+     role       = aws_iam_role.lambda_exec.name
+     policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+   }
+
+   resource "aws_api_gateway_rest_api" "chatbot_api" {
+     name        = "ChatbotAPI"
+     description = "API for Chatbot Backend"
+   }
+
+   resource "aws_api_gateway_resource" "message" {
+     rest_api_id = aws_api_gateway_rest_api.chatbot_api.id
+     parent_id   = aws_api_gateway_rest_api.chatbot_api.root_resource_id
+     path_part   = "message"
+   }
+
+   resource "aws_api_gateway_resource" "document" {
+     rest_api_id = aws_api_gateway_rest_api.chatbot_api.id
+     parent_id   = aws_api_gateway_rest_api.chatbot_api.root_resource_id
+     path_part   = "document"
+   }
+
+   resource "aws_api_gateway_method" "post_message" {
+     rest_api_id   = aws_api_gateway_rest_api.chatbot_api.id
+     resource_id   = aws_api_gateway_resource.message.id
+     http_method   = "POST"
+     authorization = "NONE"
+   }
+
+   resource "aws_api_gateway_method" "post_document" {
+     rest_api_id   = aws_api_gateway_rest_api.chatbot_api.id
+     resource_id   = aws_api_gateway_resource.document.id
+     http_method   = "POST"
+     authorization = "NONE"
+   }
+
+   resource "aws_api_gateway_integration" "lambda_message" {
+     rest_api_id             = aws_api_gateway_rest_api.chatbot_api.id
+     resource_id             = aws_api_gateway_resource.message.id
+     http_method             = aws_api_gateway_method.post_message.http_method
+     integration_http_method = "POST"
+     type                    = "AWS_PROXY"
+     uri                     = aws_lambda_function.chatbot_backend.invoke_arn
+   }
+
+   resource "aws_api_gateway_integration" "lambda_document" {
+     rest_api_id             = aws_api_gateway_rest_api.chatbot_api.id
+     resource_id             = aws_api_gateway_resource.document.id
+     http_method             = aws_api_gateway_method.post_document.http_method
+     integration_http_method = "POST"
+     type                    = "AWS_PROXY"
+     uri                     = aws_lambda_function.chatbot_backend.invoke_arn
+   }
+
+   resource "aws_api_gateway_deployment" "chatbot_deployment" {
+     rest_api_id = aws_api_gateway_rest_api.chatbot_api.id
+     stage_name  = "prod"
+
+     depends_on = [
+       aws_api_gateway_integration.lambda_message,
+       aws_api_gateway_integration.lambda_document
+     ]
+   }
+
+   output "api_endpoint" {
+     value = aws_api_gateway_deployment.chatbot_deployment.invoke_url
+   }
+   ```
+
+   **variables.tf**
+
+   ```hcl
+   variable "region" {
+     default = "us-east-1"
+   }
+   ```
+
+3. **Deploy Infrastructure with Terraform**
+
+   ```bash
+   cd terraform
+   terraform init
+   terraform apply
+   ```
+
+### 3. Setting Up the Lambda Function
+
+1. **Create Lambda Function Code**
+
+   Update `lambda_function.py` with the necessary logic:
+
+   ```python
+   import json
+   import psycopg2
+   import redis
+   from transformers import RagTokenizer, RagRetriever, RagSequenceForGeneration
+   import torch
+
+   # Database connection
+   conn = psycopg2.connect(
+       host=os.environ['RDS_ENDPOINT'],
+       database="chatbotdb",
+       user="your-username",
+       password="your-password"
+   )
+   cursor = conn.cursor()
+
+   # Redis connection
+   redis_client = redis.StrictRedis(host=os.environ['REDIS_ENDPOINT'], port=6379, db=0)
+
+   # Initialize the tokenizer and model
+   tokenizer = RagTokenizer.from_pretrained("facebook/rag-sequence-nq")
+   model = RagSequenceForGeneration.from_pretrained("facebook/rag-sequence-nq")
+
+   def add_document_to_db(document):
+       inputs = tokenizer(document['text'], return_tensors="pt")
+       with torch.no_grad():
+           embedding = model.retrieval_embeddings(**inputs).detach().numpy().flatten()
+       cursor.execute(
+           "INSERT INTO documents (title, text, embedding) VALUES (%s, %s, %s)",
+           (document['title'], document['text'], embedding)
+       )
+       conn.commit()
+
+   def query_similar_documents(query, top_k=5):
+       inputs = tokenizer(query, return_tensors="pt")
+       with torch.no_grad():
+           query_embedding = model.retrieval_embeddings(**inputs).detach().numpy().flatten()
+       cursor.execute(
+           "SELECT id, title, text, 1 - (embedding <=> %s::vector) AS similarity FROM documents ORDER BY similarity DESC LIMIT %s",
+           (query_embedding, top_k)
+       )
+       return cursor.fetchall()
+
+   def generate_response(query):
+       similar_docs = query_similar_documents(query)
+       context = " ".join([doc[2] for doc in similar_docs])
+       input_ids = tokenizer(query + context, return_tensors="pt").input_ids
+       outputs = model.generate(input_ids=input_ids)
+       response = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+       return response
+
+   def lambda_handler(event, context):
+       body = json.loads(event['body'])
+       if event['resource'] == '/message':
+           user_message = body['message']
+           cached_response = redis_client.get(user_message)
+           if cached_response:
+               bot_response = cached_response.decode('utf-8')
+           else:
+               bot_response = generate_response(user_message)
+               redis_client.set(user_message, bot_response)
+           return {
+               'statusCode': 200,
+               'body': json.dumps({'message': bot_response})
+           }
+       elif event['resource'] == '/document':
+           document = body['document']
+           add_document_to_db(document)
+           return {
+               'statusCode': 201,
+               'body': json.dumps({'message': 'Document added'})
+           }
+   ```
+
+2. **Package Lambda Function**
+
+   Package the Lambda function and its dependencies into a ZIP file:
+
+   ```bash
+   cd backend
+   pip install -r requirements.txt -t .
+   zip -r ../lambda_function.zip .
+   ```
+
+3. **Deploy with Terraform**
+
+   ```bash
+   cd terraform
+   terraform init
+   terraform apply
+   ```
+
+### 4. Update Frontend to Use API Gateway Endpoints for Discovery 5
+
+Update your React frontend to call the API Gateway endpoints.
+
+#### frontend/src/App.js for Discovery 5
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+
+const App = () => {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+
+  useEffect(() => {
+    axios.get('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message')
+      .then(response => {
+        setMessages(response.data.messages);
+      });
+  }, []);
+
+  const sendMessage = () => {
+    axios.post('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message', { message: input })
+      .then(response => {
+        setMessages([...messages, { message: input }]);
+        setInput('');
+        setTimeout(() => {
+          axios.get('https://your-api-id.execute-api.your-region.amazonaws.com/prod/message')
+            .then(response => {
+              setMessages(response.data.messages);
+            });
+        }, 1000); // Allow some time for the bot to respond
+      });
+  };
+
+  return (
+    <div>
+      <h1>Chatbot</h1>
+      <div>
+        {messages.map((msg, index) => <p key={index}>{msg.message}</p>)}
+      </div>
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        type="text"
+        placeholder="Type a message"
+      />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+};
+
+export default App;
+```
+
+### Conclusion for Discovery 5
+
+By following this guide, you have created a scalable, serverless chatbot application using AWS Lambda and API Gateway, managed with Terraform for infrastructure provisioning. This approach ensures that your application scales automatically with demand, reduces the need for server management, and provides a cost-effective solution. The application includes hosting the backend logic on Lambda, managing a PostgreSQL database with RDS (enhanced with `pgvector` for vector search), implementing caching with ElastiCache, and managing APIs with API Gateway.
