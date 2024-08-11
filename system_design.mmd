@@ -22,18 +22,27 @@ graph TD
     D -->|Fetches data from| E[RDS PostgreSQL]
     D -->|Fetches cached data from| G[ElastiCache Redis]
     D -->|Returns response to| C
+    D -->|Retrieval and Processing| L[LLM with RAG]
     class D aws
   end
 
   subgraph RDS_PostgreSQL
     E -->|Stores documents and vectors| H[Documents Table]
     E -->|Utilizes| F[pgvector Extension]
+    H --> L
     class E,H,F aws
   end
 
   %% Storage
   G -->|Stores cached responses| G1[Redis Cache]
+  G --> L
   class G,G1 storage
+
+  %% LLM and RAG Processing
+  L -->|Generates Response| K[Cache and Return Response]
+  K -->|Caches response in Redis| G1
+  K -->|Sends back to API Gateway| C
+  class L,K aws
 
   %% Output
   C -->|Returns response to| B
