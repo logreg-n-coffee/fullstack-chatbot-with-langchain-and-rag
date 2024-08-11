@@ -8,57 +8,37 @@ graph TD
   classDef management fill:#cc0000,stroke:#333,stroke-width:2px;
 
   %% User Interaction
-  subgraph User
-    A[User Interface] -->|Interacts| B[Frontend Application]
-    class A,B user
-  end
+  A[User Interface] -->|Interacts| B[Frontend Application]
+  class A,B user
 
   %% Frontend
-  subgraph Frontend
-    B -->|Sends request to| C[API Gateway]
-    class B,C frontend
-  end
+  B -->|Sends request to| C[API Gateway]
+  class C aws
 
   %% AWS Infrastructure
-  subgraph AWS_Infrastructure
-    C -->|Triggers| D[AWS Lambda Function]
+  C -->|Triggers| D[AWS Lambda Function]
 
-    subgraph Lambda_Function
-      D -->|Fetches data from| E[RDS PostgreSQL]
-      D -->|Fetches vector embeddings from| F[pgvector extension]
-      D -->|Fetches cached data from| G[ElastiCache Redis]
-      D -->|Returns response to| C
-      class D,E,F,G aws
-    end
+  subgraph AWS_Lambda_Function
+    D -->|Fetches data from| E[RDS PostgreSQL]
+    D -->|Fetches cached data from| G[ElastiCache Redis]
+    D -->|Returns response to| C
+    class D aws
+  end
 
-    subgraph RDS_Cluster
-      E -->|Stores documents and vectors| H[Documents Table]
-      class H aws
-    end
+  subgraph RDS_PostgreSQL
+    E -->|Stores documents and vectors| H[Documents Table]
+    E -->|Utilizes| F[pgvector Extension]
+    class E,H,F aws
   end
 
   %% Storage
-  subgraph Storage
-    G -->|Stores cached responses| G1[Redis Cache]
-    class G1 storage
-  end
+  G -->|Stores cached responses| G1[Redis Cache]
+  class G,G1 storage
 
   %% Output
-  subgraph Output
-    C -->|Returns response to| B
-    class C,B output
-  end
+  C -->|Returns response to| B
+  class B output
 
   %% Management
-  subgraph Management
-    I[Terraform] -->|Provision resources| AWS[All AWS Services]
-    class I aws
-  end
-
-  %% Apply Classes
-  classDef user fill:#ffcc00,stroke:#333,stroke-width:2px;
-  classDef frontend fill:#ff9900,stroke:#333,stroke-width:2px;
-  classDef aws fill:#ff6600,stroke:#333,stroke-width:2px;
-  classDef storage fill:#ff3300,stroke:#333,stroke-width:2px;
-  classDef output fill:#ff0000,stroke:#333,stroke-width:2px;
-  classDef management fill:#cc0000,stroke:#333,stroke-width:2px;
+  I[Terraform] -->|Provisions resources| AWS[All AWS Services]
+  class I,AWS management
