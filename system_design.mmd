@@ -7,47 +7,51 @@ graph TD
   classDef output fill:#ff0000,stroke:#333,stroke-width:2px;
   classDef management fill:#cc0000,stroke:#333,stroke-width:2px;
 
-  %% User Interaction
-  A[User Interface] -->|Interacts| B[Frontend Application]
-  class A,B user
-
-  %% Frontend
-  B -->|Sends request to| C[API Gateway]
-  class C aws
+  %% User/Frontend Block
+  subgraph UserFrontend [User/Frontend Interaction]
+    UI[User Interface] -->|User input| FA[Frontend Application]
+    FA -->|API requests| AG[API Gateway]
+    FA -->|Data handling and state management| FL[Frontend Logic]
+    class UI,FA,FL user
+  end
+  class UserFrontend frontend
+  class AG aws
 
   %% AWS Infrastructure
-  C -->|Triggers| D[AWS Lambda Function]
-
-  subgraph AWS_Lambda_Function
-    D -->|Fetches data from| E[RDS PostgreSQL]
-    D -->|Fetches cached data from| G[ElastiCache Redis]
-    D -->|Returns response to| C
-    D -->|Retrieval and Processing| L[LLM with RAG]
-    class D aws
+  subgraph AWS
+    AG -->|Triggers| AL[AWS Lambda]
+    AL -->|Data Retrieval| DB[RDS PostgreSQL]
+    AL -->|Caching| EC[ElastiCache Redis]
+    AL -->|Response Processing| LLM[LLM with RAG]
+    AL -->|Response Routing| AG
+    class AL aws
   end
 
-  subgraph RDS_PostgreSQL
-    E -->|Stores documents and vectors| H[Documents Table]
-    E -->|Utilizes| F[pgvector Extension]
-    H --> L
-    class E,H,F aws
+  %% Database Operations
+  subgraph RDS
+    DB -->|Vector operations| PGV[pgvector Extension]
+    DB -->|Document storage| DT[Documents Table]
+    DT -->|Vector Search| PGV
+    class DB,PGV,DT storage
   end
 
-  %% Storage
-  G -->|Stores cached responses| G1[Redis Cache]
-  G --> L
-  class G,G1 storage
+  %% Redis Cache Details
+  subgraph RedisCache [Redis Caching]
+    EC -->|Caches data| RC[Redis Cache]
+    EC -->|Supports quick data retrieval| RC
+    LLM -->|Caches processed results| RC
+    class EC,RC storage
+  end
 
-  %% LLM and RAG Processing
-  L -->|Generates Response| K[Cache and Return Response]
-  K -->|Caches response in Redis| G1
-  K -->|Sends back to API Gateway| C
-  class L,K aws
+  %% LLM Processing
+  LLM -->|Generates and caches response| CR[Cache Response]
+  CR -->|Return to API Gateway| AG
+  class LLM,CR aws
 
   %% Output
-  C -->|Returns response to| B
-  class B output
+  AG -->|Sends final response| UI
+  class UI output
 
-  %% Management
-  I[Terraform] -->|Provisions resources| AWS[All AWS Services]
-  class I,AWS management
+  %% Infrastructure Management
+  TF[Terraform] -->|Resource provisioning| AWS
+  class TF,AWS management
