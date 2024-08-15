@@ -50,6 +50,17 @@ This tutorial guides you through creating a full-stack chatbot application that 
     - [4. Update Frontend to Use API Gateway Endpoints for Discovery 5](#4-update-frontend-to-use-api-gateway-endpoints-for-discovery-5)
       - [frontend/src/App.js for Discovery 5](#frontendsrcappjs-for-discovery-5)
     - [Conclusion for Discovery 5](#conclusion-for-discovery-5)
+  - [Discover 6: Explanation of RAG Algorithm and pgvector Extension](#discover-6-explanation-of-rag-algorithm-and-pgvector-extension)
+    - [Breakdown of the SQL Query](#breakdown-of-the-sql-query)
+    - [Vector Similarity Algorithms](#vector-similarity-algorithms)
+    - [Using `pgvector` for Vector Searches](#using-pgvector-for-vector-searches)
+    - [Application in RAG and LLM](#application-in-rag-and-llm)
+  - [Discover 7: Explanation of Improvement of SQL Query using ORM](#discover-7-explanation-of-improvement-of-sql-query-using-orm)
+    - [Replacing SQL with ORM](#replacing-sql-with-orm)
+  - [Discover 8: Data Algorithm Explanation and Comparision](#discover-8-data-algorithm-explanation-and-comparision)
+    - [Python Code Implementation](#python-code-implementation)
+    - [Evaluating the Best Metric](#evaluating-the-best-metric)
+    - [Which is Best?](#which-is-best)
 
 ## Discover 1: Introduction
 
@@ -1533,3 +1544,176 @@ export default App;
 ### Conclusion for Discovery 5
 
 By following this guide, you have created a scalable, serverless chatbot application using AWS Lambda and API Gateway, managed with Terraform for infrastructure provisioning. This approach ensures that your application scales automatically with demand, reduces the need for server management, and provides a cost-effective solution. The application includes hosting the backend logic on Lambda, managing a PostgreSQL database with RDS (enhanced with `pgvector` for vector search), implementing caching with ElastiCache, and managing APIs with API Gateway.
+
+## Discover 6: Explanation of RAG Algorithm and pgvector Extension
+
+The SQL query you've shown is a part of an implementation where PostgreSQL, augmented with the `pgvector` extension, is used to handle vector similarity searches. This approach is particularly useful in applications involving natural language processing and retrieval-augmented tasks, like the ones involving a Retrieval-Augmented Generation (RAG) model. Let’s break down the query and discuss the general concept of calculating similarities with vector data.
+
+### Breakdown of the SQL Query
+
+```sql
+SELECT id, title, text, 1 - (embedding <=> %s::vector) AS similarity 
+FROM documents 
+ORDER BY similarity DESC 
+LIMIT %s
+```
+
+Here's what happens in the query:
+
+- **`embedding <=> %s::vector`**: This operation is where the similarity calculation happens. The `<=>` operator is typically used to denote a "distance" operator in vector space models supported by extensions like `pgvector`.
+- **`%s::vector`**: This syntax is used to cast the input `query_embedding` as a vector type compatible with the database's vector operations.
+- **`1 - ... AS similarity`**: This part of the query converts the distance (a lower distance means more similarity) to a similarity score (where a higher score means more similarity).
+- **`ORDER BY similarity DESC`**: The results are ordered by descending similarity, meaning the most similar items are returned first.
+- **`LIMIT %s`**: Limits the number of results returned, where `%s` is replaced by the variable `top_k`, defining how many top results to fetch.
+
+### Vector Similarity Algorithms
+
+The core idea behind calculating similarities between vectors in this context is based on distance metrics. Here are a few common approaches:
+
+1. **Euclidean Distance**: This is the "ordinary" straight-line distance between two points in Euclidean space. In many vector search applications, Euclidean distance serves as a straightforward but effective metric.
+
+2. **Cosine Similarity**: Unlike Euclidean distance, which considers magnitude, cosine similarity focuses on the angle between two vectors. This measure computes the cosine of the angle between two vectors and is particularly useful in high-dimensional spaces like text data represented as vectors.
+
+3. **Manhattan Distance**: Also known as taxicab or city block distance, this metric sums the absolute differences of their Cartesian coordinates. It is less common in high-dimensional vector spaces but can be useful in certain contexts.
+
+4. **Dot Product**: This is a measure of vector alignment that can also be used to calculate similarity, especially when vectors are normalized.
+
+### Using `pgvector` for Vector Searches
+
+`pgvector` is designed to optimize PostgreSQL for vector operations, enabling efficient storage and computation of high-dimensional vectors typically used in machine learning models. It supports several types of indexes and operations that speed up the search for nearest neighbors:
+
+- **Indexing**: `pgvector` supports creating indexes on vector columns, which can significantly speed up search queries by avoiding full-table scans.
+- **Custom Operators**: As seen in the query, `pgvector` may use custom operators like `<=>` to compute distances or similarities directly in SQL queries, tailored for vector comparisons.
+
+### Application in RAG and LLM
+
+In a Retrieval-Augmented Generation system:
+
+- Vectors typically represent embeddings from a language model, encapsulating semantic meanings of documents.
+- When a query is received, it is converted into a vector using the same model.
+- The system then retrieves the most semantically similar documents based on this vector representation, using one of the mentioned distance metrics.
+- These documents serve as context to generate a coherent and contextually enriched response by an LLM, leveraging the RAG framework.
+
+This approach effectively bridges traditional database operations with advanced NLP techniques, enabling sophisticated querying and retrieval mechanisms essential for modern AI-driven applications.
+
+## Discover 7: Explanation of Improvement of SQL Query using ORM
+
+### Replacing SQL with ORM
+
+It is possible to replace raw SQL queries with an Object-Relational Mapping (ORM) approach, which can make the code more maintainable and readable, especially for complex applications with significant database interactions. ORMs like SQLAlchemy for Python or Hibernate for Java allow developers to interact with the database using the native language constructs instead of SQL, providing a higher level of abstraction.
+
+Here's how you might rewrite the SQL query using SQLAlchemy (Python's ORM):
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, Float, String, Index
+from sqlalchemy.dialects.postgresql import ARRAY
+
+Base = declarative_base()
+
+class Document(Base):
+    __tablename__ = 'documents'
+    id = Column(Integer, primary_key=True)
+    title = Column(String)
+    text = Column(String)
+    embedding = Column(ARRAY(Float))
+
+    # Assuming pgvector is properly configured to handle vector data
+    __table_args__ = (
+        Index('ix_documents_embedding', 'embedding', postgresql_using='pgvector'),
+    )
+
+# Setup database connection
+engine = create_engine('postgresql+psycopg2://user:password@localhost/dbname')
+Session = sessionmaker(bind=engine)
+session = Session()
+
+# Example of vector search using ORM
+query_vector = [0.5, 0.1, -0.3, ...]  # Your query vector
+top_k = 5
+
+# Query using ORM, assuming pgvector operators are available
+results = session.query(Document)\
+    .order_by(Document.embedding.op('<=>')(query_vector))\
+    .limit(top_k)\
+    .all()
+
+for doc in results:
+    print(doc.title, doc.text)
+```
+
+In this ORM example:
+
+- **Model Definition**: The `Document` class maps to the `documents` table in the database, with columns defined for ID, title, text, and the vector embeddings.
+- **Query Execution**: Uses SQLAlchemy's `.op()` method to utilize custom operators like `<=>` for vector distance calculations in queries.
+
+This approach abstracts the SQL details and integrates more seamlessly into Python applications, enhancing readability and maintainability. Additionally, it makes the application more secure and robust against SQL injection attacks by default, thanks to the parameterization handled by the ORM.
+
+## Discover 8: Data Algorithm Explanation and Comparision
+
+To implement different vector similarity metrics like Euclidean, Cosine, Manhattan, and Dot Product, we can use Python with libraries such as NumPy, which provides efficient operations for handling numerical data and vector operations. Below, I'll provide code examples for each of these metrics and discuss how to evaluate which one might be best for a given scenario.
+
+### Python Code Implementation
+
+Let's implement these similarity metrics in Python:
+
+```python
+import numpy as np
+
+def euclidean_distance(vec1, vec2):
+    return np.linalg.norm(vec1 - vec2)
+
+def cosine_similarity(vec1, vec2):
+    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+
+def manhattan_distance(vec1, vec2):
+    return np.sum(np.abs(vec1 - vec2))
+
+def dot_product(vec1, vec2):
+    return np.dot(vec1, vec2)
+
+# Example vectors
+vec1 = np.array([1, 2, 3])
+vec2 = np.array([4, 5, 6])
+
+# Calculate distances and similarities
+euclidean = euclidean_distance(vec1, vec2)
+cosine = cosine_similarity(vec1, vec2)
+manhattan = manhattan_distance(vec1, vec2)
+dot = dot_product(vec1, vec2)
+
+print("Euclidean Distance:", euclidean)
+print("Cosine Similarity:", cosine)
+print("Manhattan Distance:", manhattan)
+print("Dot Product:", dot)
+```
+
+### Evaluating the Best Metric
+
+To determine which metric is "best," you need to consider the context and requirements of your application:
+
+1. **Euclidean Distance**:
+   - Good for measuring actual geometric distance. Works well when magnitude of vectors is important.
+   - Sensitive to magnitudes and better suited for low-dimensional data.
+
+2. **Cosine Similarity**:
+   - Measures the cosine of the angle between vectors. It's unaffected by the magnitude of vectors, making it useful in text processing where only the orientation of vectors matters.
+   - Preferred in high-dimensional spaces, like text data represented in TF-IDF or word embeddings, because it handles the curse of dimensionality better.
+
+3. **Manhattan Distance**:
+   - Useful in structured data. It can be more robust in certain high noise environments, as it measures the distance traveled in orthogonal moves.
+
+4. **Dot Product**:
+   - Measures vector alignment directly and can be used as a basis for cosine similarity (normalizing by magnitudes).
+   - Useful in neural network weights and activations, where the strength and direction of vectors are directly compared.
+
+### Which is Best?
+
+- **Context**: If dealing with text data or need to measure similarity or relevance in terms of angle between vectors, **Cosine Similarity** is often the best choice.
+- **Dimensionality and Scaling**: For data where scales of dimensions differ widely or are not standardized, **Manhattan Distance** can be more appropriate.
+- **General Use**: **Euclidean Distance** is very intuitive and widely used in many fields for clustering, classification, and more when the data dimensions are comparable.
+- **Data Interpretation**: **Dot Product** is particularly useful in physics and engineering contexts where forces, velocities, or other directional magnitudes are analyzed.
+
+To conclude, the "best" metric depends largely on the specific requirements and characteristics of your data and problem domain. Testing each metric's performance on your specific dataset, particularly how well they cluster or classify data according to your needs, will provide practical insights into which metric to choose.
